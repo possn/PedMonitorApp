@@ -1,0 +1,275 @@
+
+<!DOCTYPE html>
+<html lang="pt-PT">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>PedMonitorMed</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: #f4f4f4;
+        }
+        .container {
+            background-color: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0 0 10px rgba(0,0,0,0.1);
+        }
+        label, input, select {
+            display: block;
+            margin: 10px 0;
+        }
+        input, select {
+            width: 100%;
+            padding: 8px;
+            border: 1px solid #ccc;
+            border-radius: 4px;
+        }
+        button {
+            background-color: #007bff;
+            color: white;
+            padding: 10px 20px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+        button:hover {
+            background-color: #0056b3;
+        }
+        canvas {
+            margin-top: 20px;
+            max-width: 100%;
+        }
+        .warning {
+            color: red;
+            font-size: 0.9em;
+        }
+        footer {
+            margin-top: 20px;
+            text-align: center;
+            font-size: 0.8em;
+            color: #555;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>PedMonitorMed</h1>
+        <p class="warning">Nota: Ferramenta validada para uso pediátrico, mas permite cálculos em adultos (usar com cautela).</p>
+        
+        <!-- Inputs -->
+        <label>Peso (kg):</label>
+        <input type="number" id="weight" step="0.1" required>
+        
+        <label>Altura (cm):</label>
+        <input type="number" id="height" step="0.1" required>
+        
+        <label>Idade (anos):</label>
+        <input type="number" id="ageYears" min="0" required>
+        
+        <label>Idade (meses):</label>
+        <input type="number" id="ageMonths" min="0" max="11" required>
+        
+        <label>Sexo:</label>
+        <select id="sex" required>
+            <option value="male">Masculino</option>
+            <option value="female">Feminino</option>
+        </select>
+        
+        <label>Creatinina Sérica (mg/dL):</label>
+        <input type="number" id="creatinine" step="0.01" required>
+        
+        <label>Antibiótico:</label>
+        <select id="antibiotic" required>
+            <option value="vancomicina">Vancomicina</option>
+            <option value="gentamicina">Gentamicina</option>
+            <option value="amicacina">Amicacina</option>
+            <option value="tobramicina">Tobramicina</option>
+        </select>
+        
+        <label>Tipo de Infecção:</label>
+        <select id="infectionType" required>
+            <option value="geral">Infecção Geral</option>
+            <option value="grave">Infecção Grave</option>
+        </select>
+        
+        <label>Nível Plasmático Atual (mg/L):</label>
+        <input type="number" id="currentLevel" step="0.1">
+        
+        <button onclick="calculate()">Calcular</button>
+        
+        <!-- Resultados -->
+        <div id="results" style="margin-top: 20px;">
+            <h3>Resultados</h3>
+            <p><strong>Idade Decimal:</strong> <span id="decimalAge"></span> anos</p>
+            <p><strong>Clearance de Creatinina (ClCr):</strong> <span id="clcr"></span> mL/min</p>
+            <p><strong>Dose Inicial:</strong> <span id="initialDose"></span> mg</p>
+            <p><strong>Intervalo Sugerido:</strong> <span id="interval"></span> horas</p>
+            <p><strong>Dose Ajustada:</strong> <span id="adjustedDose"></span></p>
+        </div>
+        
+        <!-- Gráfico -->
+        <canvas id="levelChart"></canvas>
+        
+        <button onclick="exportPDF()">Exportar PDF</button>
+    </div>
+    
+    <footer>PedMonitorMed — versão Beta — Hospital Prof. Dr. Fernando Fonseca — Pediatria</footer>
+    
+    <script>
+        let chart = null;
+        
+        function calculate() {
+            // Inputs
+            const weight = parseFloat(document.getElementById('weight').value);
+            const height = parseFloat(document.getElementById('height').value);
+            const ageYears = parseInt(document.getElementById('ageYears').value);
+            const ageMonths = parseInt(document.getElementById('ageMonths').value);
+            const sex = document.getElementById('sex').value;
+            const creatinine = parseFloat(document.getElementById('creatinine').value);
+            const antibiotic = document.getElementById('antibiotic').value;
+            const infectionType = document.getElementById('infectionType').value;
+            const currentLevel = parseFloat(document.getElementById('currentLevel').value) || 0;
+            
+            // Cálculo da idade decimal
+            const decimalAge = ageYears + (ageMonths / 12);
+            document.getElementById('decimalAge').textContent = decimalAge.toFixed(2);
+            
+            // Cálculo de ClCr
+            let clcr;
+            if (decimalAge < 18) {
+                const k = decimalAge <= 1 ? 0.45 : 0.55;
+                clcr = (k * height) / creatinine;
+            } else {
+                const factorSex = sex === 'male' ? 1 : 0.85;
+                clcr = ((140 - ageYears) * weight * factorSex) / (72 * creatinine);
+            }
+            document.getElementById('clcr').textContent = clcr.toFixed(2);
+            
+            // Parâmetros farmacocinéticos
+            let vd, t12, targetMin, targetMax, interval;
+            if (antibiotic === 'vancomicina') {
+                vd = decimalAge <= 1 ? 0.7 : decimalAge < 18 ? 0.6 : 0.5;
+                t12 = decimalAge <= 1 ? 8 : decimalAge < 18 ? 5 : 7;
+                targetMin = infectionType === 'geral' ? 10 : 15;
+                targetMax = infectionType === 'geral' ? 20 : 25;
+                interval = decimalAge <= 1 ? 12 : 8;
+            } else if (antibiotic === 'gentamicina') {
+                vd = decimalAge <= 1 ? 0.45 : decimalAge < 18 ? 0.35 : 0.25;
+                t12 = decimalAge <= 1 ? 4 : decimalAge < 18 ? 2.5 : 2.25;
+                targetMin = infectionType === 'geral' ? 5 : 8;
+                targetMax = infectionType === 'geral' ? 10 : 12;
+                interval = decimalAge <= 1 ? 12 : 8;
+            } else if (antibiotic === 'amicacina') {
+                vd = decimalAge <= 1 ? 0.4 : decimalAge < 18 ? 0.3 : 0.25;
+                t12 = decimalAge <= 1 ? 4 : decimalAge < 18 ? 2.5 : 2.25;
+                targetMin = infectionType === 'geral' ? 20 : 25;
+                targetMax = infectionType === 'geral' ? 30 : 35;
+                interval = decimalAge <= 1 ? 12 : 8;
+            } else if (antibiotic === 'tobramicina') {
+                vd = decimalAge <= 1 ? 0.45 : decimalAge < 18 ? 0.35 : 0.25;
+                t12 = decimalAge <= 1 ? 4 : decimalAge < 18 ? 2.5 : 2.25;
+                targetMin = infectionType === 'geral' ? 5 : 8;
+                targetMax = infectionType === 'geral' ? 10 : 12;
+                interval = decimalAge <= 1 ? 12 : 8;
+            }
+            
+            // Cálculo da dose inicial
+            const dosePerKg = (targetMax * vd) / (1 - Math.exp(-0.693 / t12 * interval));
+            const initialDose = dosePerKg * weight;
+            document.getElementById('initialDose').textContent = initialDose.toFixed(2);
+            document.getElementById('interval').textContent = interval;
+            
+            // Ajuste de dose com base em nível plasmático
+            let adjustedDose = 'Não informado';
+            if (currentLevel) {
+                const targetAvg = (targetMin + targetMax) / 2;
+                adjustedDose = (initialDose * targetAvg / currentLevel).toFixed(2) + ' mg';
+            }
+            document.getElementById('adjustedDose').textContent = adjustedDose;
+            
+            // Curva farmacocinética
+            const k = 0.693 / t12; // Constante de eliminação
+            const c0 = initialDose / (vd * weight); // Concentração inicial
+            const timePoints = Array.from({length: 25}, (_, i) => i); // 0 a 24 horas
+            const concentrations = timePoints.map(t => c0 * Math.exp(-k * t));
+            
+            // Gráfico
+            if (chart) chart.destroy();
+            chart = new Chart(document.getElementById('levelChart'), {
+                type: 'line',
+                data: {
+                    labels: timePoints,
+                    datasets: [
+                        {
+                            label: 'Curva Farmacocinética',
+                            data: concentrations,
+                            borderColor: 'rgba(0, 123, 255, 1)',
+                            fill: false,
+                            tension: 0.1
+                        },
+                        {
+                            label: 'Faixa Alvo Mínima',
+                            data: timePoints.map(() => targetMin),
+                            borderColor: 'rgba(0, 255, 0, 1)',
+                            borderDash: [5, 5],
+                            fill: false
+                        },
+                        {
+                            label: 'Faixa Alvo Máxima',
+                            data: timePoints.map(() => targetMax),
+                            borderColor: 'rgba(0, 255, 0, 1)',
+                            borderDash: [5, 5],
+                            fill: false
+                        },
+                        {
+                            label: 'Nível Atual',
+                            data: currentLevel ? [{x: 0, y: currentLevel}] : [],
+                            backgroundColor: 'rgba(255, 0, 0, 1)',
+                            borderColor: 'rgba(255, 0, 0, 1)',
+                            pointRadius: 5,
+                            type: 'scatter'
+                        }
+                    ]
+                },
+                options: {
+                    scales: {
+                        x: {
+                            title: { display: true, text: 'Tempo (horas)' }
+                        },
+                        y: {
+                            beginAtZero: true,
+                            title: { display: true, text: 'Concentração (mg/L)' }
+                        }
+                    },
+                    plugins: {
+                        title: {
+                            display: true,
+                            text: 'Curva Farmacocinética'
+                        }
+                    }
+                }
+            });
+        }
+        
+        function exportPDF() {
+            const { jsPDF } = window.jspdf;
+            const doc = new jsPDF();
+            doc.text('PedMonitorMed - Resultados', 10, 10);
+            doc.text(`Idade Decimal: ${document.getElementById('decimalAge').textContent} anos`, 10, 20);
+            doc.text(`ClCr: ${document.getElementById('clcr').textContent} mL/min`, 10, 30);
+            doc.text(`Dose Inicial: ${document.getElementById('initialDose').textContent} mg`, 10, 40);
+            doc.text(`Intervalo: ${document.getElementById('interval').textContent} horas`, 10, 50);
+            doc.text(`Dose Ajustada: ${document.getElementById('adjustedDose').textContent}`, 10, 60);
+            doc.text('PedMonitorMed — versão Beta — Hospital Prof. Dr. Fernando Fonseca — Pediatria', 10, 280);
+            doc.save('PedMonitorMed_Resultados.pdf');
+        }
+    </script>
+</body>
+</html>
